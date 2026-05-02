@@ -12,6 +12,13 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == "joseperalta.isc94@gmail.com" ||
+        request.auth.token.email == "edersalgadosalgado@gmail.com"
+      );
+    }
+
     function isValidId(id) {
       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
@@ -27,9 +34,9 @@ service cloud.firestore {
       }
 
       allow read: if isSignedIn();
-      allow create: if isSignedIn() && isValidProduct(request.resource.data);
-      allow update: if isSignedIn() && isValidProduct(request.resource.data);
-      allow delete: if isSignedIn();
+      allow create: if isAdmin() && isValidProduct(request.resource.data);
+      allow update: if isAdmin() && isValidProduct(request.resource.data);
+      allow delete: if isAdmin();
     }
 
     // Accounts
@@ -44,9 +51,9 @@ service cloud.firestore {
       }
 
       allow read: if isSignedIn();
-      allow create: if isSignedIn() && isValidAccount(request.resource.data);
-      allow update: if isSignedIn() && isValidAccount(request.resource.data);
-      allow delete: if isSignedIn();
+      allow create: if isAdmin() && isValidAccount(request.resource.data);
+      allow update: if isAdmin() && isValidAccount(request.resource.data);
+      allow delete: if isAdmin();
 
       // Items in Account
       match /items/{itemId} {
@@ -60,7 +67,7 @@ service cloud.firestore {
         }
 
         allow read: if isSignedIn();
-        allow write: if isSignedIn() && isValidItem(request.resource.data);
+        allow write: if isAdmin() && isValidItem(request.resource.data);
       }
     }
   }

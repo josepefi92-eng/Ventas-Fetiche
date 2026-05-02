@@ -39,8 +39,7 @@ import {
   writeBatch
 } from 'firebase/firestore';
 import { 
-  signInWithPopup, 
-  GoogleAuthProvider, 
+  signInWithEmailAndPassword,
   onAuthStateChanged, 
   signOut,
   User
@@ -88,6 +87,9 @@ export default function App() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [loginEmail, setLoginEmail] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [isNewAccountModalOpen, setIsNewAccountModalOpen] = useState(false);
@@ -157,12 +159,18 @@ export default function App() {
     else document.documentElement.classList.remove('dark');
   }, [isDarkMode]);
 
-  const login = async () => {
-    const provider = new GoogleAuthProvider();
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError('');
     try {
-      await signInWithPopup(auth, provider);
-    } catch (error) {
+      await signInWithEmailAndPassword(auth, loginEmail, loginPassword);
+    } catch (error: any) {
       console.error(error);
+      if (error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential') {
+        setLoginError('Credenciales incorrectas. Verifica tu correo y contraseña.');
+      } else {
+        setLoginError('Error al iniciar sesión. Intenta de nuevo.');
+      }
     }
   };
 
@@ -368,15 +376,42 @@ export default function App() {
             <Coffee className="w-10 h-10 text-white" />
           </div>
           <h1 className="text-4xl font-black mb-4 tracking-tighter">QUICK POS</h1>
-          <p className="opacity-50 mb-10 text-lg leading-relaxed">Gestión inteligente para tu negocio, sincronizada en todos tus dispositivos.</p>
+          <p className="opacity-50 mb-10 text-lg leading-relaxed">Gestión inteligente para tu negocio.</p>
           
-          <button 
-            onClick={login}
-            className="w-full bg-blue-600 hover:bg-blue-700 text-white py-5 rounded-2xl font-black text-xl shadow-xl shadow-blue-500/20 flex items-center justify-center gap-4 transition-all active:scale-95"
-          >
-            <LogIn className="w-6 h-6" />
-            Entrar con Google
-          </button>
+          <form onSubmit={handleLogin} className="space-y-4 text-left">
+            <div>
+              <label className="block text-[10px] font-bold uppercase tracking-widest mb-1 ml-1 opacity-50">Correo Electrónico</label>
+              <input 
+                type="email" 
+                required
+                value={loginEmail}
+                onChange={(e) => setLoginEmail(e.target.value)}
+                className={`w-full p-4 rounded-xl border-2 focus:ring-4 outline-none transition-all ${isDarkMode ? 'bg-neutral-800 border-neutral-700 focus:border-blue-500' : 'bg-neutral-50 border-neutral-100 focus:border-blue-500'}`}
+                placeholder="usuario@gmail.com"
+              />
+            </div>
+            <div>
+              <label className="block text-[10px] font-bold uppercase tracking-widest mb-1 ml-1 opacity-50">Contraseña</label>
+              <input 
+                type="password" 
+                required
+                value={loginPassword}
+                onChange={(e) => setLoginPassword(e.target.value)}
+                className={`w-full p-4 rounded-xl border-2 focus:ring-4 outline-none transition-all ${isDarkMode ? 'bg-neutral-800 border-neutral-700 focus:border-blue-500' : 'bg-neutral-50 border-neutral-100 focus:border-blue-500'}`}
+                placeholder="********"
+              />
+            </div>
+            
+            {loginError && <p className="text-red-500 text-xs font-bold mt-2">{loginError}</p>}
+            
+            <button 
+              type="submit"
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white py-5 rounded-2xl font-black text-xl shadow-xl shadow-blue-500/20 flex items-center justify-center gap-4 transition-all active:scale-95 mt-6"
+            >
+              <LogIn className="w-6 h-6" />
+              Entrar
+            </button>
+          </form>
           
           <p className="mt-8 text-xs opacity-30 font-medium uppercase tracking-[0.2em]">Punto de Venta Profesional</p>
         </motion.div>
@@ -391,8 +426,10 @@ export default function App() {
       <div className={`fixed top-0 left-0 right-0 z-40 bg-white/80 dark:bg-neutral-950/80 backdrop-blur-md border-b dark:border-neutral-800 px-6 py-2 transition-all md:block hidden`}>
         <div className="max-w-6xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
-             {user.photoURL && <img src={user.photoURL} className="w-8 h-8 rounded-full border border-neutral-200" referrerPolicy="no-referrer" />}
-             <span className="font-bold text-xs uppercase tracking-widest">{user.displayName}</span>
+             <div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center text-white font-bold text-xs">
+                {user.email?.[0].toUpperCase()}
+             </div>
+             <span className="font-bold text-xs uppercase tracking-widest">{user.email}</span>
           </div>
           <button onClick={logout} className="p-2 text-neutral-400 hover:text-red-500 transition-colors">
             <LogOut className="w-4 h-4" />
