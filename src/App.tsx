@@ -146,16 +146,19 @@ export default function App() {
           id: crypto.randomUUID(),
           productId: product.id,
           name: product.name,
-          price: product.price,
+          price: Number(product.price),
           quantity: 1
         });
       }
 
-      const total = newItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-      return { ...acc, items: newItems, total };
+      // Recalcular total de forma explícita
+      const newTotal = newItems.reduce((sum, item) => {
+        return sum + (Number(item.price) * item.quantity);
+      }, 0);
+
+      return { ...acc, items: newItems, total: newTotal };
     }));
     
-    // Simple feedback sound/haptic (browser permitting)
     if ('vibrate' in navigator) navigator.vibrate(10);
   };
 
@@ -169,8 +172,12 @@ export default function App() {
         return { ...item, quantity: newQty };
       }).filter(item => item.quantity > 0);
 
-      const total = newItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-      return { ...acc, items: newItems, total };
+      // Recalcular total de forma explícita
+      const newTotal = newItems.reduce((sum, item) => {
+        return sum + (Number(item.price) * item.quantity);
+      }, 0);
+
+      return { ...acc, items: newItems, total: newTotal };
     }));
   };
 
