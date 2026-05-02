@@ -1,0 +1,67 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Product Catalog
+    match /products/{productId} {
+      function isValidProduct(data) {
+        return data.keys().hasAll(['name', 'price', 'category']) 
+          && data.keys().size() == 3
+          && data.name is string && data.name.size() > 0 && data.name.size() <= 100
+          && data.price is number && data.price >= 0
+          && data.category is string && data.category.size() > 0;
+      }
+
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidProduct(request.resource.data);
+      allow update: if isSignedIn() && isValidProduct(request.resource.data);
+      allow delete: if isSignedIn();
+    }
+
+    // Accounts
+    match /accounts/{accountId} {
+      function isValidAccount(data) {
+        return data.keys().hasAll(['name', 'status', 'total', 'createdAt']) 
+          && data.keys().size() >= 4
+          && data.name is string && data.name.size() > 0 && data.name.size() <= 100
+          && data.status in ['open', 'closed']
+          && data.total is number 
+          && data.createdAt is number;
+      }
+
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidAccount(request.resource.data);
+      allow update: if isSignedIn() && isValidAccount(request.resource.data);
+      allow delete: if isSignedIn();
+
+      // Items in Account
+      match /items/{itemId} {
+        function isValidItem(data) {
+          return data.keys().hasAll(['productId', 'name', 'price', 'quantity'])
+            && data.keys().size() == 4
+            && data.name is string 
+            && data.price is number 
+            && data.quantity is int 
+            && data.quantity >= 0;
+        }
+
+        allow read: if isSignedIn();
+        allow write: if isSignedIn() && isValidItem(request.resource.data);
+      }
+    }
+  }
+}

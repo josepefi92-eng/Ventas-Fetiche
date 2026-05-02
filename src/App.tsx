@@ -20,9 +20,32 @@ import {
   PlusCircle,
   MinusCircle,
   CreditCard,
-  UserPlus
+  UserPlus,
+  LogIn,
+  LogOut
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { 
+  collection, 
+  onSnapshot, 
+  addDoc, 
+  deleteDoc, 
+  doc, 
+  updateDoc, 
+  query, 
+  orderBy, 
+  setDoc,
+  getDocs,
+  writeBatch
+} from 'firebase/firestore';
+import { 
+  signInWithPopup, 
+  GoogleAuthProvider, 
+  onAuthStateChanged, 
+  signOut,
+  User
+} from 'firebase/auth';
+import { db, auth, handleFirestoreError, OperationType } from './lib/firebase';
 
 // --- Types ---
 interface Product {
@@ -63,6 +86,8 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'accounts' | 'menu' | 'history'>('accounts');
   const [products, setProducts] = useState<Product[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
+  const [user, setUser] = useState<User | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [isNewAccountModalOpen, setIsNewAccountModalOpen] = useState(false);
@@ -70,27 +95,61 @@ export default function App() {
 
   const [accountToDelete, setAccountToDelete] = useState<string | null>(null);
 
-  // --- Persistence ---
+  // --- Auth & Sync ---
   useEffect(() => {
-    const savedProducts = localStorage.getItem('pos_products');
-    const savedAccounts = localStorage.getItem('pos_accounts');
+    const unsubscribeAuth = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setIsLoading(false);
+    });
+
     const savedTheme = localStorage.getItem('pos_theme');
-
-    if (savedProducts) setProducts(JSON.parse(savedProducts));
-    else setProducts(DEFAULT_PRODUCTS);
-
-    if (savedAccounts) setAccounts(JSON.parse(savedAccounts));
-    
     if (savedTheme === 'dark') setIsDarkMode(true);
+
+    return () => unsubscribeAuth();
   }, []);
 
   useEffect(() => {
-    localStorage.setItem('pos_products', JSON.stringify(products));
-  }, [products]);
+    if (!user) {
+      setProducts([]);
+      setAccounts([]);
+      return;
+    }
 
-  useEffect(() => {
-    localStorage.setItem('pos_accounts', JSON.stringify(accounts));
-  }, [accounts]);
+    // Sync Products
+    const qProducts = query(collection(db, 'products'), orderBy('name', 'asc'));
+    const unsubscribeProducts = onSnapshot(qProducts, (snapshot) => {
+      const p = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Product));
+      setProducts(p.length > 0 ? p : []);
+    }, (error) => handleFirestoreError(error, OperationType.GET, 'products'));
+
+    // Sync Accounts
+    const qAccounts = query(collection(db, 'accounts'), orderBy('createdAt', 'desc'));
+    const unsubscribeAccounts = onSnapshot(qAccounts, async (snapshot) => {
+      const accs: Account[] = [];
+      
+      for (const docSnapshot of snapshot.docs) {
+        const accData = docSnapshot.data();
+        
+        // Fetch items subcollection for each account
+        // Note: In a large production app, you might want to fetch items only for the active account
+        // but for a smaller POS, real-time sync for all helps with consistency.
+        const itemsSnap = await getDocs(collection(db, 'accounts', docSnapshot.id, 'items'));
+        const items = itemsSnap.docs.map(itemDoc => ({ id: itemDoc.id, ...itemDoc.data() } as AccountItem));
+        
+        accs.push({
+          id: docSnapshot.id,
+          ...accData,
+          items
+        } as Account);
+      }
+      setAccounts(accs);
+    }, (error) => handleFirestoreError(error, OperationType.GET, 'accounts'));
+
+    return () => {
+      unsubscribeProducts();
+      unsubscribeAccounts();
+    };
+  }, [user]);
 
   useEffect(() => {
     localStorage.setItem('pos_theme', isDarkMode ? 'dark' : 'light');
@@ -98,11 +157,21 @@ export default function App() {
     else document.documentElement.classList.remove('dark');
   }, [isDarkMode]);
 
+  const login = async () => {
+    const provider = new GoogleAuthProvider();
+    try {
+      await signInWithPopup(auth, provider);
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
+  const logout = () => signOut(auth);
+
   // --- Handlers ---
-  const createAccount = () => {
-    if (!newAccountName.trim()) return;
+  const createAccount = async () => {
+    if (!newAccountName.trim() || !user) return;
     
-    // Split by new line or comma to support multiple accounts
     const names = newAccountName
       .split(/[\n,]/)
       .map(name => name.trim())
@@ -110,40 +179,49 @@ export default function App() {
 
     if (names.length === 0) return;
 
-    const newAccounts: Account[] = names.map(name => ({
-      id: crypto.randomUUID(),
-      name,
-      items: [],
-      status: 'open',
-      createdAt: Date.now(),
-      total: 0
-    }));
+    try {
+      const batch = writeBatch(db);
+      const newAccIds: string[] = [];
 
-    setAccounts([...newAccounts, ...accounts]);
-    setNewAccountName('');
-    setIsNewAccountModalOpen(false);
-    
-    // Auto-select the first only if one was added
-    if (newAccounts.length === 1) {
-      setSelectedAccountId(newAccounts[0].id);
+      for (const name of names) {
+        const accRef = doc(collection(db, 'accounts'));
+        batch.set(accRef, {
+          name,
+          status: 'open',
+          total: 0,
+          createdAt: Date.now()
+        });
+        newAccIds.push(accRef.id);
+      }
+
+      await batch.commit();
+      setNewAccountName('');
+      setIsNewAccountModalOpen(false);
+      
+      if (newAccIds.length === 1) {
+        setSelectedAccountId(newAccIds[0]);
+      }
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'accounts');
     }
   };
 
-  const addProductToAccount = (accountId: string, product: Product) => {
-    setAccounts(prev => prev.map(acc => {
-      if (acc.id !== accountId) return acc;
-      
-      const existingItemIndex = acc.items.findIndex(item => item.productId === product.id);
-      let newItems = [...acc.items];
+  const addProductToAccount = async (accountId: string, product: Product) => {
+    if (!user) return;
+    const acc = accounts.find(a => a.id === accountId);
+    if (!acc) return;
 
-      if (existingItemIndex > -1) {
-        newItems[existingItemIndex] = {
-          ...newItems[existingItemIndex],
-          quantity: newItems[existingItemIndex].quantity + 1
-        };
+    const existingItem = acc.items.find(item => item.productId === product.id);
+    
+    try {
+      if (existingItem) {
+        const itemRef = doc(db, 'accounts', accountId, 'items', existingItem.id);
+        await updateDoc(itemRef, {
+          quantity: existingItem.quantity + 1
+        });
       } else {
-        newItems.push({
-          id: crypto.randomUUID(),
+        const itemsCol = collection(db, 'accounts', accountId, 'items');
+        await addDoc(itemsCol, {
           productId: product.id,
           name: product.name,
           price: Number(product.price),
@@ -151,67 +229,114 @@ export default function App() {
         });
       }
 
-      // Recalcular total de forma explícita
-      const newTotal = newItems.reduce((sum, item) => {
-        return sum + (Number(item.price) * item.quantity);
-      }, 0);
+      // Read current items to calculate total correctly (or wait for snapshot, but here we update the parent total)
+      // Actually, it's better to update the total in a separate step or via functions, 
+      // but here we'll update it locally after calculating.
+      const accRef = doc(db, 'accounts', accountId);
+      const updatedAcc = accounts.find(a => a.id === accountId);
+      if (updatedAcc) {
+        const tempItems = [...updatedAcc.items];
+        if (existingItem) {
+          const idx = tempItems.findIndex(i => i.id === existingItem.id);
+          tempItems[idx].quantity += 1;
+        } else {
+          tempItems.push({ id: '', productId: product.id, name: product.name, price: Number(product.price), quantity: 1 });
+        }
+        const newTotal = tempItems.reduce((sum, item) => sum + (Number(item.price) * item.quantity), 0);
+        await updateDoc(accRef, { total: newTotal });
+      }
 
-      return { ...acc, items: newItems, total: newTotal };
-    }));
+      if ('vibrate' in navigator) navigator.vibrate(10);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `accounts/${accountId}`);
+    }
+  };
+
+  const updateItemQuantity = async (accountId: string, itemId: string, delta: number) => {
+    if (!user) return;
+    const acc = accounts.find(a => a.id === accountId);
+    if (!acc) return;
+
+    const item = acc.items.find(i => i.id === itemId);
+    if (!item) return;
+
+    const newQty = Math.max(0, item.quantity + delta);
     
-    if ('vibrate' in navigator) navigator.vibrate(10);
+    try {
+      const itemRef = doc(db, 'accounts', accountId, 'items', itemId);
+      if (newQty === 0) {
+        await deleteDoc(itemRef);
+      } else {
+        await updateDoc(itemRef, { quantity: newQty });
+      }
+
+      // Update total
+      const newItems = acc.items.map(i => i.id === itemId ? { ...i, quantity: newQty } : i).filter(i => i.quantity > 0);
+      const newTotal = newItems.reduce((sum, i) => sum + (Number(i.price) * i.quantity), 0);
+      await updateDoc(doc(db, 'accounts', accountId), { total: newTotal });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `accounts/${accountId}/items/${itemId}`);
+    }
   };
 
-  const updateItemQuantity = (accountId: string, itemId: string, delta: number) => {
-    setAccounts(prev => prev.map(acc => {
-      if (acc.id !== accountId) return acc;
-      
-      const newItems = acc.items.map(item => {
-        if (item.id !== itemId) return item;
-        const newQty = Math.max(0, item.quantity + delta);
-        return { ...item, quantity: newQty };
-      }).filter(item => item.quantity > 0);
-
-      // Recalcular total de forma explícita
-      const newTotal = newItems.reduce((sum, item) => {
-        return sum + (Number(item.price) * item.quantity);
-      }, 0);
-
-      return { ...acc, items: newItems, total: newTotal };
-    }));
+  const closeAccount = async (accountId: string) => {
+    if (!user) return;
+    try {
+      await updateDoc(doc(db, 'accounts', accountId), {
+        status: 'closed',
+        closedAt: Date.now()
+      });
+      setSelectedAccountId(null);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `accounts/${accountId}`);
+    }
   };
 
-  const closeAccount = (accountId: string) => {
-    setAccounts(prev => prev.map(acc => {
-      if (acc.id !== accountId) return acc;
-      return { ...acc, status: 'closed', closedAt: Date.now() };
-    }));
-    setSelectedAccountId(null);
+  const deleteAccount = async (accountId: string) => {
+    if (!user) return;
+    try {
+      await deleteDoc(doc(db, 'accounts', accountId));
+      if (selectedAccountId === accountId) setSelectedAccountId(null);
+      setAccountToDelete(null);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `accounts/${accountId}`);
+    }
   };
 
-  const deleteAccount = (accountId: string) => {
-    setAccounts(prev => prev.filter(acc => acc.id !== accountId));
-    if (selectedAccountId === accountId) setSelectedAccountId(null);
-    setAccountToDelete(null);
+  const addProductToCatalog = async (name: string, price: number, category: string) => {
+    if (!user) return;
+    try {
+      await addDoc(collection(db, 'products'), {
+        name,
+        price: Number(price),
+        category
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'products');
+    }
   };
 
-  const addProductToCatalog = (name: string, price: number, category: string) => {
-    const newProduct: Product = {
-      id: crypto.randomUUID(),
-      name,
-      price,
-      category
-    };
-    setProducts([...products, newProduct]);
+  const deleteProductFromCatalog = async (productId: string) => {
+    if (!user) return;
+    try {
+      await deleteDoc(doc(db, 'products', productId));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `products/${productId}`);
+    }
   };
 
-  const deleteProductFromCatalog = (productId: string) => {
-    setProducts(prev => prev.filter(p => p.id !== productId));
-  };
-
-  const clearHistory = () => {
+  const clearHistory = async () => {
+    if (!user) return;
     if (confirm('¿Estás seguro de eliminar TODO el historial de ventas? Esta acción no se puede deshacer.')) {
-      setAccounts(prev => prev.filter(acc => acc.status === 'open'));
+      try {
+        const batch = writeBatch(db);
+        closedAccounts.forEach(acc => {
+          batch.delete(doc(db, 'accounts', acc.id));
+        });
+        await batch.commit();
+      } catch (error) {
+        handleFirestoreError(error, OperationType.DELETE, 'accounts');
+      }
     }
   };
 
@@ -220,9 +345,61 @@ export default function App() {
   const closedAccounts = accounts.filter(acc => acc.status === 'closed');
   const selectedAccount = accounts.find(acc => acc.id === selectedAccountId);
 
+  if (isLoading) {
+    return (
+      <div className={`min-h-screen flex items-center justify-center ${isDarkMode ? 'bg-neutral-950 text-white' : 'bg-neutral-50 text-neutral-900'}`}>
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
+          <p className="font-bold animate-pulse">Cargando Sistema...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className={`min-h-screen flex items-center justify-center p-6 ${isDarkMode ? 'bg-neutral-950 text-white' : 'bg-neutral-50 text-neutral-900'}`}>
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className={`w-full max-w-md p-10 rounded-[3rem] border shadow-2xl text-center ${isDarkMode ? 'bg-neutral-900 border-neutral-800' : 'bg-white border-neutral-100'}`}
+        >
+          <div className="bg-blue-600 w-20 h-20 rounded-3xl mx-auto mb-8 flex items-center justify-center shadow-lg shadow-blue-500/20">
+            <Coffee className="w-10 h-10 text-white" />
+          </div>
+          <h1 className="text-4xl font-black mb-4 tracking-tighter">QUICK POS</h1>
+          <p className="opacity-50 mb-10 text-lg leading-relaxed">Gestión inteligente para tu negocio, sincronizada en todos tus dispositivos.</p>
+          
+          <button 
+            onClick={login}
+            className="w-full bg-blue-600 hover:bg-blue-700 text-white py-5 rounded-2xl font-black text-xl shadow-xl shadow-blue-500/20 flex items-center justify-center gap-4 transition-all active:scale-95"
+          >
+            <LogIn className="w-6 h-6" />
+            Entrar con Google
+          </button>
+          
+          <p className="mt-8 text-xs opacity-30 font-medium uppercase tracking-[0.2em]">Punto de Venta Profesional</p>
+        </motion.div>
+      </div>
+    );
+  }
+
   return (
     <div className={`min-h-screen transition-colors duration-300 ${isDarkMode ? 'bg-neutral-950 text-neutral-100' : 'bg-neutral-50 text-neutral-900'}`}>
       
+      {/* User Header */}
+      <div className={`fixed top-0 left-0 right-0 z-40 bg-white/80 dark:bg-neutral-950/80 backdrop-blur-md border-b dark:border-neutral-800 px-6 py-2 transition-all md:block hidden`}>
+        <div className="max-w-6xl mx-auto flex items-center justify-between">
+          <div className="flex items-center gap-3">
+             {user.photoURL && <img src={user.photoURL} className="w-8 h-8 rounded-full border border-neutral-200" referrerPolicy="no-referrer" />}
+             <span className="font-bold text-xs uppercase tracking-widest">{user.displayName}</span>
+          </div>
+          <button onClick={logout} className="p-2 text-neutral-400 hover:text-red-500 transition-colors">
+            <LogOut className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+
       {/* --- Navigation Bar --- */}
       <nav className={`fixed bottom-0 left-0 right-0 z-50 h-16 flex items-center justify-around border-t ${isDarkMode ? 'bg-neutral-900 border-neutral-800' : 'bg-white border-neutral-200'} md:top-0 md:bottom-auto`}>
         <div className="flex w-full max-w-4xl mx-auto items-center justify-around">
@@ -483,7 +660,7 @@ export default function App() {
                   groups[date] = (groups[date] || 0) + acc.total;
                   return groups;
                 }, {})
-              ).sort((a, b) => new Date(b[0]).getTime() - new Date(a[0]).getTime()).map(([date, total]) => (
+              ).sort((a, b) => new Date(b[0]).getTime() - new Date(a[0]).getTime()).map(([date, total]: [string, number]) => (
                 <div key={date} className={`p-5 rounded-2xl border ${isDarkMode ? 'bg-neutral-900 border-neutral-800' : 'bg-white border-neutral-200'}`}>
                   <p className="text-xs font-bold opacity-50 uppercase tracking-widest">{date}</p>
                   <p className="text-2xl font-black mt-1 text-blue-600 dark:text-blue-400">${total.toFixed(2)}</p>
