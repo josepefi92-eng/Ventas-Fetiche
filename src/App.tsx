@@ -570,10 +570,22 @@ export default function App() {
                                 <p className="font-medium">{item.name}</p>
                                 <p className="text-xs opacity-50">${item.price.toFixed(2)} c/u</p>
                               </div>
-                              <div className="flex items-center gap-3 bg-neutral-100 dark:bg-neutral-800 p-1 rounded-lg">
-                                <button onClick={() => updateItemQuantity(selectedAccount.id, item.id, -1)} className="p-1 hover:text-red-500"><MinusCircle className="w-5 h-5" /></button>
-                                <span className="w-6 text-center font-bold">{item.quantity}</span>
-                                <button onClick={() => updateItemQuantity(selectedAccount.id, item.id, 1)} className="p-1 hover:text-green-500"><PlusCircle className="w-5 h-5" /></button>
+                              <div className="flex items-center gap-3 bg-neutral-100 dark:bg-neutral-800/80 p-1.5 rounded-xl border dark:border-neutral-700">
+                                <button 
+                                  onClick={() => updateItemQuantity(selectedAccount.id, item.id, -1)} 
+                                  className="p-1.5 text-neutral-500 hover:text-red-500 transition-colors"
+                                >
+                                  <MinusCircle className="w-6 h-6" />
+                                </button>
+                                <span className="w-8 text-center font-black text-neutral-900 dark:text-white text-lg">
+                                  {item.quantity}
+                                </span>
+                                <button 
+                                  onClick={() => updateItemQuantity(selectedAccount.id, item.id, 1)} 
+                                  className="p-1.5 text-neutral-500 hover:text-green-500 transition-colors"
+                                >
+                                  <PlusCircle className="w-6 h-6" />
+                                </button>
                               </div>
                             </div>
                           ))
